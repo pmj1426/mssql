@@ -1,11 +1,10 @@
-package mysql
+package mssql
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
 
-	//_ "github.com/go-sql-driver/mysql"
 	mssql "github.com/denisenkom/go-mssqldb"
 	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/scorify/schema"
@@ -130,6 +129,6 @@ func Run(ctx context.Context, config string) error {
 			return fmt.Errorf("no rows returned from query: %q", conf.Query)
 		}
 	}
-
+	defer cl.Destroy()
 	return nil
 }
