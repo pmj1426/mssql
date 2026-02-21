@@ -4,16 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
-	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	//_ "github.com/go-sql-driver/mysql"
+	mssql "github.com/denisenkom/go-mssqldb"
+	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/scorify/schema"
 )
 
 type Schema struct {
-	Server   string `key:"target"`
-	Port     int    `key:"port" default:"3306"`
+	Server    string `key:"target"`
+	Port      int    `key:"port" default:"3306"`
+	KDCServer string `key:"kdcserver"`
+	//KDCPort   int    `key:"kdcport" default:"88"`
+	Domain   string `key:"domain"`
 	Username string `key:"username"`
 	Password string `key:"password"`
 	Database string `key:"database"`
@@ -48,6 +51,18 @@ func Validate(config string) error {
 		return fmt.Errorf("database is required; got %q", conf.Database)
 	}
 
+	if conf.Domain == "" {
+		return fmt.Errorf("domain is required; got %q", conf.Domain)
+	}
+
+	if conf.KDCServer == "" {
+		return fmt.Errorf("KDC Server is required; got %q", conf.KDCServer)
+	}
+
+	//if conf.KDCPort <= 0 || conf.KDCPort > 65535 {
+	//	return fmt.Errorf("port is invalid; got %d", conf.KDCPort)
+	//}
+
 	return nil
 }
 
@@ -64,28 +79,44 @@ func Run(ctx context.Context, config string) error {
 		return fmt.Errorf("context deadline is not set")
 	}
 
-	connStr := fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/%s?timeout=%ds",
-		conf.Username,
-		conf.Password,
-		conf.Server,
-		conf.Port,
-		conf.Database,
-		int(math.Floor(time.Until(deadline).Seconds())),
+	krbConf := fmt.Sprintf(`
+[libdefaults]
+ default_realm = %s
+ dns_lookup_kdc = false
+[realms]
+ %s = { kdc = %s }
+`, conf.Domain, conf.Domain, conf.KDCServer)
+
+	cfg, err := config.NewFromString(krbConf)
+	if err != nil {
+		return err
+	}
+
+	cl := client.NewWithPassword(conf.Username, conf.Domain, conf.Password, cfg)
+	if err := cl.Login(); err != nil {
+		return fmt.Errorf("Kerberos login failed: %v", err)
+	}
+
+	conn, err := mssql.NewKerberosConnector(
+		fmt.Sprintf("sqlserver://%s:%d?database=master", conf.Server, conf.Port),
+		cl,
 	)
 
-	conn, err := sql.Open("mysql", connStr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to mysql server: %w", err)
-	}
-	defer conn.Close()
+	db := sql.OpenDB(conn)
+	defer db.Close()
+
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		deadline,
+	)
+	defer cancel()
 
 	conn.SetMaxIdleConns(-1)
 	conn.SetMaxOpenConns(1)
 
 	err = conn.PingContext(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to ping mysql server: %w", err)
+		return fmt.Errorf("failed to ping mssql server: %w", err)
 	}
 
 	if conf.Query != "" {
