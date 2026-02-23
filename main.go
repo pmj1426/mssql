@@ -93,22 +93,25 @@ func Run(ctx context.Context, config string) error {
 	}
 	defer conn.Close()
 
-	conn.SetMaxIdleConns(-1)
-	conn.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(0)
+	db.SetMaxOpenConns(1)
 
-	err = conn.PingContext(ctx)
+	err = db.PingContext(execCtx)
 	if err != nil {
 		return fmt.Errorf("failed to ping mssql server: %w", err)
 	}
 
 	if conf.Query != "" {
-		rows, err := conn.QueryContext(ctx, conf.Query)
+		rows, err := db.QueryContext(execCtx, conf.Query)
 		if err != nil {
 			return fmt.Errorf("failed to execute query: %w", err)
 		}
 		defer rows.Close()
 
 		if !rows.Next() {
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("query failed while reading rows: %w", err)
+			}
 			return fmt.Errorf("no rows returned from query: %q", conf.Query)
 		}
 	}
