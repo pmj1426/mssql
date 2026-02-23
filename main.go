@@ -93,10 +93,10 @@ func Run(ctx context.Context, config string) error {
 	}
 	defer conn.Close()
 
-	db.SetMaxIdleConns(0)
-	db.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(0)
+	conn.SetMaxOpenConns(1)
 
-	err = db.PingContext(execCtx)
+	err = conn.PingContext(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to ping mssql server: %w", err)
 	}
