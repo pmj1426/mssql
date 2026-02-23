@@ -102,7 +102,7 @@ func Run(ctx context.Context, config string) error {
 	}
 
 	if conf.Query != "" {
-		rows, err := db.QueryContext(execCtx, conf.Query)
+		rows, err := conn.QueryContext(ctx, conf.Query)
 		if err != nil {
 			return fmt.Errorf("failed to execute query: %w", err)
 		}
