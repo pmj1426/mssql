@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
+	"time"
 
-	mssql "github.com/denisenkom/go-mssqldb"
-	"github.com/jcmturner/gokrb5/v8/client"
+	_ "github.com/microsoft/go-mssqldb"
+	_ "github.com/microsoft/go-mssqldb/integratedauth/krb5"
 	"github.com/scorify/schema"
 )
 
@@ -14,12 +16,11 @@ type Schema struct {
 	Server    string `key:"target"`
 	Port      int    `key:"port" default:"3306"`
 	KDCServer string `key:"kdcserver"`
-	//KDCPort   int    `key:"kdcport" default:"88"`
-	Domain   string `key:"domain"`
-	Username string `key:"username"`
-	Password string `key:"password"`
-	Database string `key:"database"`
-	Query    string `key:"query"`
+	KRBPath   string `key:"krbpath"`
+	Username  string `key:"username"`
+	Password  string `key:"password"`
+	Database  string `key:"database"`
+	Query     string `key:"query"`
 }
 
 func Validate(config string) error {
@@ -50,17 +51,13 @@ func Validate(config string) error {
 		return fmt.Errorf("database is required; got %q", conf.Database)
 	}
 
-	if conf.Domain == "" {
-		return fmt.Errorf("domain is required; got %q", conf.Domain)
+	if conf.KRBPath == "" {
+		return fmt.Errorf("domain is required; got %q", conf.KRBPath)
 	}
-
+	//need port as part of it
 	if conf.KDCServer == "" {
 		return fmt.Errorf("KDC Server is required; got %q", conf.KDCServer)
 	}
-
-	//if conf.KDCPort <= 0 || conf.KDCPort > 65535 {
-	//	return fmt.Errorf("port is invalid; got %d", conf.KDCPort)
-	//}
 
 	return nil
 }
@@ -78,37 +75,23 @@ func Run(ctx context.Context, config string) error {
 		return fmt.Errorf("context deadline is not set")
 	}
 
-	krbConf := fmt.Sprintf(`
-[libdefaults]
- default_realm = %s
- dns_lookup_kdc = false
-[realms]
- %s = { kdc = %s }
-`, conf.Domain, conf.Domain, conf.KDCServer)
+	AdoConnStr := fmt.Sprintf(
+		"authenticator=krb5;server=%v,%v;database=%v;user id=%v;password=%v;krb5-realm=%v;krb5-configfile=%v;connection timeout=%v",
+		conf.Server,
+		conf.Port,
+		conf.Database,
+		conf.Username,
+		conf.Password,
+		conf.KDCServer,
+		conf.KRBPath,
+		int(math.Floor(time.Until(deadline).Seconds())),
+	)
 
-	cfg, err := config.NewFromString(krbConf)
+	conn, err := sql.Open("sqlserver", AdoConnStr)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open mssql connection: %v", err)
 	}
-
-	cl := client.NewWithPassword(conf.Username, conf.Domain, conf.Password, cfg)
-	if err := cl.Login(); err != nil {
-		return fmt.Errorf("Kerberos login failed: %v", err)
-	}
-
-	conn, err := mssql.NewKerberosConnector(
-		fmt.Sprintf("sqlserver://%s:%d?database=master", conf.Server, conf.Port),
-		cl,
-	)
-
-	db := sql.OpenDB(conn)
-	defer db.Close()
-
-	ctx, cancel := context.WithDeadline(
-		context.Background(),
-		deadline,
-	)
-	defer cancel()
+	defer conn.Close()
 
 	conn.SetMaxIdleConns(-1)
 	conn.SetMaxOpenConns(1)
@@ -129,6 +112,5 @@ func Run(ctx context.Context, config string) error {
 			return fmt.Errorf("no rows returned from query: %q", conf.Query)
 		}
 	}
-	defer cl.Destroy()
 	return nil
 }
